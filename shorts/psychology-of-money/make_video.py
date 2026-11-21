@@ -43,18 +43,19 @@ EMPH_SCALE = 1.12
 EMPH_RESERVE = 1.16
 
 # 行: ("テキスト", サイズ, 表示開始秒[シーン内], 色) ／ {…} が金色＋拡大
+# 表示開始秒をマイナス（-1）にすると、シーン冒頭から表示済みになる（強調語の拡大は0.25秒後）
 # アイコン/図: ("@名前", 高さ, 表示開始秒) ／ 余白: ("_", 高さ)
 # 注記: ("!テキスト", サイズ, 表示開始秒) → 画面下部（安全領域内）に小さく固定表示
 SCENES = [
     # 1. フック 0〜4秒
     (0.0, 4.0, [
-        ("@coin", 170, 0.0),
+        ("@coin", 170, -1),
         ("_", 50),
-        ("「月1万円しか", 84, 0.1),
-        ("投資できないなら、", 84, 0.5),
-        ("{意味ない}」", 104, 0.9),
+        ("「月1万円しか", 84, -1),
+        ("投資できないなら、", 84, -1),
+        ("{意味ない}」", 104, -1),
         ("_", 40),
-        ("…そう思ってない？", 76, 2.0),
+        ("…そう思ってない？", 76, -1),
     ]),
     # 2. 問いかけ 4〜10秒
     (4.0, 7.0, [
@@ -70,7 +71,7 @@ SCENES = [
     (10.0, 15.5, [
         ("バフェットの資産（イメージ）", 52, 0.0, SUB),
         ("_", 20),
-        ("@chart", 900, 0.2),
+        ("@chart", 840, 0.2),
     ]),
     (15.5, 20.0, [
         ("@chart_static", 560, 0.0),
@@ -98,8 +99,8 @@ SCENES = [
         ("{いちばん}持っている", 96, 1.2),
     ]),
     (34.0, 40.0, [
-        ("@timeline", 360, 0.0),
-        ("_", 40),
+        ("@timeline", 400, 0.0),
+        ("_", 10),
         ("22歳で始める1万円は、", 76, 0.6),
         ("35歳で始める1万円より", 76, 1.6),
         ("{長く育つ}", 120, 2.6),
@@ -110,7 +111,7 @@ SCENES = [
         ("_", 40),
         ("読んで、", 84, 0.4),
         ("少額でも「{今}」", 104, 1.6),
-        ("始めることにした", 96, 3.0),
+        ("{積立}を始めた", 104, 3.0),
     ]),
     # 6. 締め 48〜56秒
     (48.0, 52.0, [
@@ -124,8 +125,8 @@ SCENES = [
         ("詳しくは", 76, 0.0),
         ("プロフィールの", 84, 0.4),
         ("{楽天ROOM}から", 104, 0.8),
-        ("@pointdown", 100, 1.4),
-        ("!※投資をすすめる動画ではありません", 38, 0.0),
+        ("_", 30),
+        ("※投資をすすめる動画ではありません", 48, 1.4, SUB),
     ]),
 ]
 
@@ -224,19 +225,23 @@ class TextLine:
         self.has_emph = any(p[2] for p in self.parts)
 
     def change_times(self):
-        t = [self.delay, self.delay + ITEM_FADE]
+        d = max(self.delay, 0.0)
+        t = [d, d + ITEM_FADE]
         if self.has_emph:
-            t.append(self.delay + EMPH_POP_DELAY + 0.5)
+            t.append(d + EMPH_POP_DELAY + 0.5)
         return t
 
     def draw(self, frame, cy, lt):
-        p = ease_out((lt - self.delay) / ITEM_FADE)
+        p = 1.0 if self.delay < 0 else ease_out((lt - self.delay) / ITEM_FADE)
         if p <= 0:
             return
         x0 = (W - self.w) / 2
         top = cy - self.h / 2 + (1 - p) * 36
-        et = lt - self.delay - EMPH_POP_DELAY
-        scale = 1.0 if et <= 0 else emph_curve(et)
+        et = lt - max(self.delay, 0.0) - EMPH_POP_DELAY
+        if self.delay < 0:   # 最初から表示の行は、拡大済みの状態から軽く弾ませる
+            scale = EMPH_SCALE + 0.08 * math.sin(math.pi * min(max(et, 0.0) / 0.5, 1.0))
+        else:
+            scale = 1.0 if et <= 0 else emph_curve(et)
         for img, xo, e, slot in self.parts:
             im = img
             if e and scale != 1.0:
@@ -355,7 +360,7 @@ class Icon:
         return [self.delay, self.delay + ITEM_FADE]
 
     def draw(self, frame, cy, lt):
-        p = ease_out((lt - self.delay) / ITEM_FADE)
+        p = 1.0 if self.delay < 0 else ease_out((lt - self.delay) / ITEM_FADE)
         if p <= 0:
             return
         s = 0.9 + 0.1 * p
@@ -419,7 +424,7 @@ class Timeline:
     """22歳スタートと35歳スタートの「育つ期間」の比較バー（65歳まで）"""
 
     def __init__(self, h, delay):
-        self.h, self.delay, self.w = h, delay, 900
+        self.h, self.delay, self.w = h, delay, 980
 
     def change_times(self):
         return [self.delay, self.delay + 0.4, self.delay + 1.6, self.delay + 2.2]
@@ -432,19 +437,22 @@ class Timeline:
         w, h = self.w, self.h
         img = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
         g = ImageDraw.Draw(img)
-        x0, x1 = 170, w - 30           # 22歳 〜 65歳
+        bar_h = 110
+        x0, x1 = 200, w - 10           # 22歳 〜 65歳
         age2x = lambda age: x0 + (x1 - x0) * (age - 22) / (65 - 22)
         rows = [("22歳", 22, GOLD, 0.2), ("35歳", 35, (200, 225, 210), 0.8)]
         for i, (lab, age, col, d) in enumerate(rows):
-            y = 40 + i * 150
+            y = 20 + i * (bar_h + 60)
             t = ease_out((lt - self.delay - d) / 1.0)
-            g.text((0, (y + 6) * k), lab, font=font(48 * k), fill=(255, 255, 255, 255))
-            g.rounded_rectangle((x0 * k, y * k, x1 * k, (y + 70) * k), radius=35 * k, fill=(255, 255, 255, 28))
-            xs, xe = age2x(age), age2x(age) + (x1 - age2x(age)) * t
+            g.text((0, (y + bar_h / 2) * k), lab, font=font(64 * k), fill=(255, 255, 255, 255), anchor="lm")
+            g.rounded_rectangle((x0 * k, y * k, x1 * k, (y + bar_h) * k), radius=bar_h / 2 * k,
+                                fill=(255, 255, 255, 28))
+            xs = age2x(age)
+            xe = xs + (x1 - xs) * t
             if t > 0:
-                g.rounded_rectangle((xs * k, y * k, max(xe, xs + 70) * k, (y + 70) * k), radius=35 * k,
-                                    fill=col + (255,))
-        g.text(((x1) * k, (h - 40) * k), "65歳", font=font(34 * k), fill=SUB + (255,), anchor="rm")
+                g.rounded_rectangle((xs * k, y * k, max(xe, xs + bar_h) * k, (y + bar_h) * k),
+                                    radius=bar_h / 2 * k, fill=col + (255,))
+        g.text((x1 * k, (h - 10) * k), "→ 65歳", font=font(44 * k), fill=SUB + (255,), anchor="rb")
         im = img.resize((w, h), Image.LANCZOS)
         frame.alpha_composite(with_alpha(im, a), (int(W / 2 - w / 2), int(cy - h / 2)))
 
@@ -543,6 +551,8 @@ def prepare():
     scenes = []
     for s0, s1, spec in SCENES:
         placed, top, bottom = build_scene(spec)
+        if bottom > H * 0.75:
+            print(f"[info] {s0}-{s1}s: 内容の下端 {bottom:.0f}px が画面下25%（{H*0.75:.0f}px〜）にかかっています")
         if top < SAFE_TOP + SAFE_MARGIN - 1 or bottom > H - SAFE_BOTTOM - SAFE_MARGIN + 1:
             print(f"[warn] {s0}-{s1}s: 安全領域を超えています top={top:.0f} bottom={bottom:.0f}")
         # 同じ画面が MAX_STATIC 秒以上続かないかチェック
